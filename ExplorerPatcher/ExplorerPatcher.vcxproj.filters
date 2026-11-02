@@ -129,6 +129,9 @@
     <ClInclude Include="osutility.h">
       <Filter>Header Files\internal</Filter>
     </ClInclude>
+    <ClInclude Include="ExplorerNavigation.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="ImmersiveColor.h">
       <Filter>Header Files</Filter>
     </ClInclude>
