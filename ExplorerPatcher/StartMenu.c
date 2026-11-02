@@ -1,6 +1,7 @@
 #include "StartMenu.h"
+#include "StartMenuMonitor.h"
 
-void OpenStartOnMonitor(HMONITOR monitor)
+HRESULT OpenStartOnMonitor(HMONITOR monitor)
 {
     HRESULT hr = S_OK;
     IUnknown* pImmersiveShell = NULL;
@@ -14,7 +15,7 @@ void OpenStartOnMonitor(HMONITOR monitor)
     if (SUCCEEDED(hr))
     {
         IImmersiveMonitorService* pMonitorService = NULL;
-        IUnknown_QueryService(
+        hr = IUnknown_QueryService(
             pImmersiveShell,
             &SID_IImmersiveMonitorService,
             &IID_IImmersiveMonitorService,
@@ -23,13 +24,13 @@ void OpenStartOnMonitor(HMONITOR monitor)
         if (pMonitorService)
         {
             IUnknown* pMonitor = NULL;
-            pMonitorService->lpVtbl->GetFromHandle(
+            hr = pMonitorService->lpVtbl->GetFromHandle(
                 pMonitorService,
                 monitor,
                 &pMonitor
             );
             IImmersiveLauncher10RS* pLauncher = NULL;
-            IUnknown_QueryService(
+            hr = IUnknown_QueryService(
                 pImmersiveShell,
                 &SID_ImmersiveLauncher,
                 &IID_IImmersiveLauncher10RS,
@@ -38,20 +39,25 @@ void OpenStartOnMonitor(HMONITOR monitor)
             if (pLauncher)
             {
                 BOOL bIsVisible = FALSE;
-                pLauncher->lpVtbl->IsVisible(pLauncher, &bIsVisible);
+                hr = pLauncher->lpVtbl->IsVisible(pLauncher, &bIsVisible);
                 if (SUCCEEDED(hr))
                 {
                     if (!bIsVisible)
                     {
                         if (pMonitor)
                         {
-                            pLauncher->lpVtbl->ConnectToMonitor(pLauncher, pMonitor);
+                            hr = pLauncher->lpVtbl->ConnectToMonitor(pLauncher, pMonitor);
                         }
-                        pLauncher->lpVtbl->ShowStartView(pLauncher, 11, 0);
+                        else
+                        {
+                            hr = E_FAIL;
+                        }
+                        if (SUCCEEDED(hr))
+                            hr = pLauncher->lpVtbl->ShowStartView(pLauncher, 11, 0);
                     }
                     else
                     {
-                        pLauncher->lpVtbl->Dismiss(pLauncher);
+                        hr = pLauncher->lpVtbl->Dismiss(pLauncher, 6);
                     }
                 }
                 pLauncher->lpVtbl->Release(pLauncher);
@@ -64,6 +70,7 @@ void OpenStartOnMonitor(HMONITOR monitor)
         }
         pImmersiveShell->lpVtbl->Release(pImmersiveShell);
     }
+    return hr;
 }
 
 LRESULT CALLBACK OpenStartOnCurentMonitorThreadHook(
@@ -75,66 +82,18 @@ LRESULT CALLBACK OpenStartOnCurentMonitorThreadHook(
     if (code == HC_ACTION && wParam)
     {
         MSG* msg = (MSG*)lParam;
-        if (GetSystemMetrics(SM_CMONITORS) >= 2 && msg->message == WM_SYSCOMMAND && (msg->wParam & 0xFFF0) == SC_TASKLIST)
+        if (msg->message == RegisterWindowMessageW(EP_START_MONITOR_INIT_MESSAGE))
         {
-            printf("Position Start\n");
-            if (bMonitorOverride == 1)
-            {
-                goto finish;
-            }
-
-            /*DWORD dwStatus = 0;
-            DWORD dwSize = sizeof(DWORD);
-            HMODULE hModule = GetModuleHandle(TEXT("Shlwapi.dll"));
-            FARPROC SHRegGetValueFromHKCUHKLMFunc = GetProcAddress(hModule, "SHRegGetValueFromHKCUHKLM");
-            if (!SHRegGetValueFromHKCUHKLMFunc || SHRegGetValueFromHKCUHKLMFunc(
-                TEXT("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartPage"),
-                TEXT("MonitorOverride"),
-                SRRF_RT_REG_DWORD,
-                NULL,
-                &dwStatus,
-                (LPDWORD)(&dwSize)
-            ) != ERROR_SUCCESS || dwStatus == 1)
-            {
-                goto finish;
-            }*/
-
-            HMONITOR monitor = NULL;
-            if (!bMonitorOverride)
-            {
-                DWORD pts = GetMessagePos();
-                POINT pt;
-                pt.x = GET_X_LPARAM(pts);
-                pt.y = GET_Y_LPARAM(pts);
-                printf("!! %d %d\n", pt.x, pt.y);
-                monitor = MonitorFromPoint(
-                    pt,
-                    MONITOR_DEFAULTTONULL
-                );
-            }
-            else
-            {
-                MonitorOverrideData mod;
-                mod.cbIndex = 2;
-                mod.dwIndex = bMonitorOverride;
-                mod.hMonitor = NULL;
-                EnumDisplayMonitors(NULL, NULL, ExtractMonitorByIndex, &mod);
-                if (mod.hMonitor == NULL)
-                {
-                    POINT pt; pt.x = 0; pt.y = 0;
-                    monitor = MonitorFromPoint(pt, MONITOR_DEFAULTTOPRIMARY);
-                }
-                else
-                {
-                    monitor = mod.hMonitor;
-                }
-            }
-            OpenStartOnMonitor(monitor);
-
+            StartMenu_InstallMonitorHook();
             msg->message = WM_NULL;
         }
+        else if (GetSystemMetrics(SM_CMONITORS) >= 2 && msg->message == WM_SYSCOMMAND && (msg->wParam & 0xFFF0) == SC_TASKLIST)
+        {
+            // Retain the legacy desktop route; only consume it when the operation succeeded.
+            if (bMonitorOverride != 1 && SUCCEEDED(OpenStartOnMonitor(StartMenu_MonitorForOverride(bMonitorOverride))))
+                msg->message = WM_NULL;
+        }
     }
-finish:
     return CallNextHookEx(NULL, code, wParam, lParam);
 }
 
@@ -172,6 +131,36 @@ DWORD OpenStartOnCurentMonitorThread(OpenStartOnCurentMonitorThreadParams* unuse
         progThread
     );
     printf("Progman hook: %d\n", g_ProgHook);
+    HHOOK launcherHook = NULL;
+    DWORD launcherThread = 0;
+    DWORD shellProcess = 0;
+    GetWindowThreadProcessId(g_ProgWin, &shellProcess);
+    UINT initializeMessage = RegisterWindowMessageW(EP_START_MONITOR_INIT_MESSAGE);
+    for (DWORD attempt = 0; attempt < 30 && !StartMenu_IsMonitorHookInstalled(); ++attempt)
+    {
+        // The launcher belongs to the immersive shell apartment. Both Progman and
+        // the taskbar receive COM proxies, whose methods must never be hooked.
+        HWND shellManager = FindWindowW(L"ApplicationManager_DesktopShellWindow", NULL);
+        DWORD process = 0;
+        DWORD thread = shellManager ? GetWindowThreadProcessId(shellManager, &process) : 0;
+        if (thread && process == shellProcess)
+        {
+            if (thread != launcherThread)
+            {
+                if (launcherHook)
+                    UnhookWindowsHookEx(launcherHook);
+                launcherHook = SetWindowsHookExW(WH_GETMESSAGE, OpenStartOnCurentMonitorThreadHook, NULL, thread);
+                launcherThread = launcherHook ? thread : 0;
+            }
+            if (launcherHook)
+                PostMessageW(shellManager, initializeMessage, 0, 0);
+        }
+        Sleep(1000);
+    }
+    if (launcherHook)
+        UnhookWindowsHookEx(launcherHook);
+    CloseHandle(hEvent);
+
     MSG msg = { 0 };
     while (GetMessage(&msg, NULL, 0, 0))
     {
@@ -180,6 +169,7 @@ DWORD OpenStartOnCurentMonitorThread(OpenStartOnCurentMonitorThreadParams* unuse
     }
 
     printf("Ended \"Open Start on current monitor\" thread.\n");
+    return 0;
 }
 
 DWORD OpenStartAtLogonThread(OpenStartAtLogonThreadParams* unused)

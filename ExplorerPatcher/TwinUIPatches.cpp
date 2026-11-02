@@ -18,6 +18,7 @@
 #include "NativeString.h"
 #include "RefCountedObject.h"
 #include "SimpleArray.h"
+#include "StartMenuMonitor.h"
 
 // #define USE_REIMPLEMENTED_CLauncherTipContextMenu
 
@@ -266,6 +267,88 @@ IImmersiveLauncher : IUnknown
     virtual HRESULT STDMETHODCALLTYPE OnFirstSignAnimationFinished() = 0;
     virtual HRESULT STDMETHODCALLTYPE Prelaunch() = 0;
 };
+
+extern "C" DWORD bMonitorOverride;
+
+static HRESULT (STDMETHODCALLTYPE* StartMenu_ShowStartViewOriginal)(IImmersiveLauncher*, IMMERSIVELAUNCHERSHOWMETHOD, IMMERSIVELAUNCHERSHOWFLAGS);
+static LONG g_startMonitorHookState;
+
+static HRESULT STDMETHODCALLTYPE StartMenu_ShowStartViewHook(
+    IImmersiveLauncher* launcher, IMMERSIVELAUNCHERSHOWMETHOD method, IMMERSIVELAUNCHERSHOWFLAGS flags)
+{
+    // The Win key reaches XamlLauncher::OnHotkeyInvoke directly on current builds,
+    // bypassing Progman's SC_TASKLIST. Select the monitor before layout, animation,
+    // and taskbar visibility notifications, rather than moving the visible window.
+    if (method == ILSM_HSHELLTASKMAN && GetSystemMetrics(SM_CMONITORS) > 1)
+    {
+        ComPtr<IServiceProvider> shell;
+        ComPtr<IImmersiveMonitorManager> monitors;
+        ComPtr<IImmersiveMonitor> monitor;
+        if (SUCCEEDED(CoCreateInstance(CLSID_ImmersiveShell, nullptr, CLSCTX_LOCAL_SERVER, IID_PPV_ARGS(&shell)))
+            && SUCCEEDED(shell->QueryService(SID_IImmersiveMonitorService, IID_PPV_ARGS(&monitors)))
+            && SUCCEEDED(monitors->GetFromHandle(StartMenu_MonitorForOverride(bMonitorOverride), &monitor))
+            && SUCCEEDED(launcher->ConnectToMonitor(monitor.Get())))
+        {
+            // Keyboard invocation otherwise calls AdjustMonitorConnectedIfNeeded()
+            // and replaces the explicit selection with the system's monitor.
+            method = ILSM_STARTBUTTON;
+        }
+    }
+    return StartMenu_ShowStartViewOriginal(launcher, method, flags);
+}
+
+extern "C" BOOL StartMenu_IsMonitorHookInstalled(void)
+{
+    return InterlockedCompareExchange(&g_startMonitorHookState, 0, 0) == 2;
+}
+
+extern "C" BOOL StartMenu_InstallMonitorHook(void)
+{
+    LONG state = InterlockedCompareExchange(&g_startMonitorHookState, 1, 0);
+    if (state)
+        return state == 2;
+
+    ComPtr<IServiceProvider> shell;
+    ComPtr<IImmersiveLauncher> launcher;
+    HRESULT hr = CoCreateInstance(CLSID_ImmersiveShell, nullptr, CLSCTX_LOCAL_SERVER, IID_PPV_ARGS(&shell));
+    if (SUCCEEDED(hr))
+        hr = shell->QueryService(SID_ImmersiveLauncher, IID_PPV_ARGS(&launcher));
+    if (SUCCEEDED(hr))
+    {
+        void* target = (*reinterpret_cast<void***>(launcher.Get()))[3];
+        HMODULE owner = nullptr;
+        // Never hook a COM proxy: its entry point may be shared by unrelated interfaces.
+        if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                reinterpret_cast<LPCWSTR>(target), &owner)
+            && owner == GetModuleHandleW(L"twinui.pcshell.dll"))
+        {
+            StartMenu_ShowStartViewOriginal = reinterpret_cast<decltype(StartMenu_ShowStartViewOriginal)>(target);
+            hr = SlimDetoursInlineHook(TRUE, reinterpret_cast<void**>(&StartMenu_ShowStartViewOriginal), StartMenu_ShowStartViewHook);
+        }
+        else
+        {
+            hr = E_NOINTERFACE;
+        }
+    }
+    InterlockedExchange(&g_startMonitorHookState, SUCCEEDED(hr) ? 2 : 0);
+    printf("[StartMonitor] Install on thread %lu: 0x%08lX\n", GetCurrentThreadId(), hr);
+    return SUCCEEDED(hr);
+}
+
+extern "C" HMONITOR StartMenu_GetConnectedMonitor(void)
+{
+    ComPtr<IServiceProvider> shell;
+    ComPtr<IImmersiveLauncher> launcher;
+    ComPtr<IImmersiveMonitor> monitor;
+    HMONITOR handle = nullptr;
+    if (SUCCEEDED(CoCreateInstance(CLSID_ImmersiveShell, nullptr, CLSCTX_LOCAL_SERVER, IID_PPV_ARGS(&shell)))
+        && SUCCEEDED(shell->QueryService(SID_ImmersiveLauncher, IID_PPV_ARGS(&launcher)))
+        && SUCCEEDED(launcher->GetMonitor(&monitor)))
+    {
+        monitor->GetHandle(&handle);
+    }
+    return handle;
+}
 
 MIDL_INTERFACE("b8c1db5f-cbb3-48bc-afd9-ce6b880c79ed")
 ILauncherTipContextMenu : IUnknown

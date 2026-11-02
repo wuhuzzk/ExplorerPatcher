@@ -149,7 +149,8 @@ typedef struct IImmersiveLauncher10RSVtbl
         /* [in] */ int flags);
 
     HRESULT(STDMETHODCALLTYPE* Dismiss)(
-        IImmersiveLauncher10RS* This);
+        IImmersiveLauncher10RS* This,
+        int method);
 
     HRESULT(STDMETHODCALLTYPE* method5)(
         IImmersiveLauncher10RS* This);
@@ -183,7 +184,7 @@ interface IImmersiveLauncher10RS
     CONST_VTBL struct IImmersiveLauncher10RSVtbl* lpVtbl;
 };
 
-void OpenStartOnMonitor(HMONITOR monitor);
+HRESULT OpenStartOnMonitor(HMONITOR monitor);
 
 // Slightly tweaked version of function available in Open Shell 
 // (Open-Shell-Menu\Src\StartMenu\StartMenuHelper\StartMenuHelper.cpp)

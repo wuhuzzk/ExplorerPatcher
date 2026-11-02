@@ -15,6 +15,7 @@
 #pragma comment(lib, "Propsys.lib")
 #include <commctrl.h>
 #include "ExplorerNavigation.h"
+#include "StartMenuMonitor.h"
 #pragma comment(lib, "Comctl32.lib")
 #include <dwmapi.h>
 #pragma comment(lib, "Dwmapi.lib")
@@ -12894,62 +12895,13 @@ int Start_SetWindowRgn(HWND hWnd, HRGN hRgn, BOOL bRedraw)
             HWND hWndTaskbar = NULL;
             if (TaskbarAl)
             {
-                HMONITOR hMonitorOfStartMenu = NULL;
-                if (bMonitorOverride == 1 || !bMonitorOverride) {
-                    POINT pt;
-                    if (!bMonitorOverride) GetCursorPos(&pt);
-                    else {
-                        pt.x = 0; pt.y = 0;
-                    }
-                    hMonitorOfStartMenu = MonitorFromPoint(pt, MONITOR_DEFAULTTOPRIMARY);
-                }
-                else {
-                    MonitorOverrideData mod;
-                    mod.cbIndex = 2;
-                    mod.dwIndex = bMonitorOverride;
-                    mod.hMonitor = NULL;
-                    EnumDisplayMonitors(NULL, NULL, ExtractMonitorByIndex, &mod);
-                    if (mod.hMonitor == NULL)
-                    {
-                        POINT pt; pt.x = 0; pt.y = 0;
-                        hMonitorOfStartMenu = MonitorFromPoint(pt, MONITOR_DEFAULTTOPRIMARY);
-                    }
-                    else
-                    {
-                        hMonitorOfStartMenu = mod.hMonitor;
-                    }
-                }
-
-                HWND hWndTemp = NULL;
-
-                HWND hShellTray_Wnd = FindWindowExW(NULL, NULL, L"Shell_TrayWnd", NULL);
-                if (hShellTray_Wnd && !hWndTaskbar && hMonitorOfStartMenu == MonitorFromWindow(hShellTray_Wnd, MONITOR_DEFAULTTOPRIMARY) && dwOldTaskbarAl)
-                {
-                    hWndTaskbar = hShellTray_Wnd;
-                }
-
-                if (!hWndTaskbar)
-                {
-                    do
-                    {
-                        hWndTemp = FindWindowExW(
-                            NULL,
-                            hWndTemp,
-                            L"Shell_SecondaryTrayWnd",
-                            NULL
-                        );
-                        if (hWndTemp && !hWndTaskbar && hMonitorOfStartMenu == MonitorFromWindow(hWndTemp, MONITOR_DEFAULTTOPRIMARY) && dwMMOldTaskbarAl)
-                        {
-                            hWndTaskbar = hWndTemp;
-                            break;
-                        }
-                    } while (hWndTemp);
-                }
-
-                if(!hWndTaskbar)
-                {
-                    hWndTaskbar = hShellTray_Wnd;
-                }
+                // Follow the launcher's actual target for both keyboard and mouse opens.
+                // Re-reading the cursor setting here used to move only the window while
+                // leaving layout, animation, and the auto-hidden taskbar on another display.
+                HMONITOR monitor = StartMenu_GetConnectedMonitor();
+                if (!monitor)
+                    monitor = MonitorFromWindow(hWnd, MONITOR_DEFAULTTOPRIMARY);
+                hWndTaskbar = StartMenu_TaskbarForMonitor(monitor);
             }
             MONITORINFO mi;
             ZeroMemory(&mi, sizeof(MONITORINFO));

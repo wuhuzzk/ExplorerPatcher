@@ -303,6 +303,7 @@
     <ClInclude Include="SettingsMonitor.h" />
     <ClInclude Include="StartExperience.h" />
     <ClInclude Include="StartMenu.h" />
+    <ClInclude Include="StartMenuMonitor.h" />
     <ClInclude Include="StartupSound.h" />
     <ClInclude Include="symbols.h" />
     <ClInclude Include="TaskbarCenter.h" />

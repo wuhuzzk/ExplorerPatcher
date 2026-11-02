@@ -54,6 +54,9 @@
     <ClInclude Include="StartMenu.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="StartMenuMonitor.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="symbols.h">
       <Filter>Header Files</Filter>
     </ClInclude>
